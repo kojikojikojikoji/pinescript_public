@@ -12,7 +12,7 @@ strategy(
 // 【ロジック概要】
 //  1. Bollinger Bands(1σ)を使用した逆張りシグナル
 //  2. ロングは下限から上に再度抜けたらエントリー
-//  3. ショートは上限から下に再度抜けたらエントリー
+//  3. ショートはしない
 //  4. 反対バンドのクロスで決済（シンプル）
 // ----------------------
 
@@ -50,8 +50,7 @@ if belowLower
     log.warning("strategy.position_size: " + str.tostring(strategy.position_size))
     strategy.entry("Long", strategy.long)
 
-// --- ロング決済（ショートも追加したい場合は同様の処理を追記）---
+// --- ロング決済
 if inLong and aboveUpper
     strategy.close("Long", comment="Close Long")
 
-// === 参考: ストップロス・利確等は必要に応じて追記してください
