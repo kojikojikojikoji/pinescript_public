@@ -1,0 +1,57 @@
+//@version=6
+strategy(
+     title="MK Bollinger Reversal Strategy",  // ← タイトルを変更
+     shorttitle="MK BBRevStrat",              // ← ショートタイトルを変更
+     overlay=true,
+     initial_capital=1000000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10
+)
+
+// ----------------------
+// 【ロジック概要】
+//  1. Bollinger Bands(1σ)を使用した逆張りシグナル
+//  2. ロングは下限から上に再度抜けたらエントリー
+//  3. ショートは上限から下に再度抜けたらエントリー
+//  4. 反対バンドのクロスで決済（シンプル）
+// ----------------------
+
+// === 入力パラメータ ===
+length    = input.int(14, "BB 長期")
+mult      = input.float(1, "BB乗数(σ)")
+src       = input.source(close, "ソース")
+
+// === Bollinger Bands の計算 ===
+basis  = ta.sma(src, length)        // 移動平均
+dev    = ta.stdev(src, length)      // 標準偏差
+dev2   = dev * mult
+
+upperBand = basis + dev2
+lowerBand = basis - dev2
+
+// === プロット設定 ===
+plot(basis,       color=color.new(color.yellow, 0), linewidth=2, title="Basis (SMA)")
+plot(upperBand,   color=color.new(color.blue,   0), linewidth=1, title="Upper BB")
+plot(lowerBand,   color=color.new(color.orange, 0), linewidth=1, title="Lower BB")
+fill(plot(upperBand), plot(basis),     color=color.new(color.blue,   80))
+fill(plot(basis),     plot(lowerBand), color=color.new(color.orange, 80))
+
+// === シグナル検出 ===
+belowLower = ta.crossover(close, lowerBand)   // 下バンドを下回った後、再度上に抜けた
+aboveUpper = ta.crossunder(close, upperBand)  // 上バンドを上回った後、再度下に抜けた
+
+// 現在のポジション判定
+inLong  = strategy.position_size > 0
+inShort = strategy.position_size < 0
+
+// --- ロングエントリー ---
+if belowLower
+    log.warning("long status: " + str.tostring(inLong))
+    log.warning("strategy.position_size: " + str.tostring(strategy.position_size))
+    strategy.entry("Long", strategy.long)
+
+// --- ロング決済（ショートも追加したい場合は同様の処理を追記）---
+if inLong and aboveUpper
+    strategy.close("Long", comment="Close Long")
+
+// === 参考: ストップロス・利確等は必要に応じて追記してください
