@@ -1,0 +1,122 @@
+//@version=6
+strategy("MK Strategy - Trend Start Example",
+     shorttitle="MK_TrendStart",
+     overlay=true,
+     initial_capital=1000000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10)
+
+//------------------------------------------------
+// 関数: 過去バーの合計 (ta.sumが使えない場合の代替)
+//------------------------------------------------
+f_sum(_src, _length) =>
+    float _total = 0.0
+    // _length 回だけループ (最大100)
+    for i = 0 to _length - 1
+        _total += _src[i]
+    _total
+
+//------------------------------------------------
+// 入力パラメータ
+//------------------------------------------------
+// Bollinger
+bbLength    = input.int(10,   "BB期間")     
+bbMult      = input.float(0.8, "BB乗数(σ)") 
+
+// EMAトレンド判定
+shortLen    = input.int(9,  "短期EMA")
+longLen     = input.int(21, "中期EMA")
+
+// RSIフィルター
+rsiPeriod   = input.int(5,   "RSI期間")
+rsiLimit    = input.int(55,  "RSI上限(エントリー許可)")
+
+// 損切り & 利確
+stopLossPerc   = input.float(0.5,  "損切り(%)")
+takeProfitPerc = input.float(2.5,  "利確(%)")
+
+// ネガティブ・ボリューム比率
+volLookback     = input.int(14, "出来高計算期間(<=100)")
+volumeExitLimit = input.float(50, "売り圧力(%)閾値")
+
+//------------------------------------------------
+// 1) Bollinger Bands
+//------------------------------------------------
+src   = input.source(close, "Bollinger計算用ソース")
+basis = ta.sma(src, bbLength)
+dev   = ta.stdev(src, bbLength)
+dev2  = dev * bbMult
+
+upperBand = basis + dev2
+lowerBand = basis - dev2
+
+plot(basis,       color=color.yellow, linewidth=2, title="BB Basis")
+plot(upperBand,   color=color.blue,   linewidth=1, title="BB Upper")
+plot(lowerBand,   color=color.orange, linewidth=1, title="BB Lower")
+fill(plot(upperBand), plot(basis),     color=color.new(color.blue,   80))
+fill(plot(basis),     plot(lowerBand), color=color.new(color.orange, 80))
+
+//------------------------------------------------
+// 2) EMAトレンド判定
+//------------------------------------------------
+shortMa = ta.ema(close, shortLen)
+longMa  = ta.ema(close, longLen)
+plot(shortMa, color=color.new(color.aqua,  0), linewidth=2, title="短期EMA")
+plot(longMa,  color=color.new(color.purple,0), linewidth=2, title="中期EMA")
+
+// "上昇トレンド開始" = 短期EMAが中期EMAを上抜け
+trendStart = ta.crossover(shortMa, longMa)
+
+// "上昇トレンド継続" = 短期EMA > 中期EMA
+inUpTrend  = shortMa > longMa
+
+//------------------------------------------------
+// 3) RSIフィルター
+//------------------------------------------------
+rsiValue = ta.rsi(close, rsiPeriod)
+rsiOk    = rsiValue < rsiLimit
+
+//------------------------------------------------
+// 4) ロングエントリー条件
+//------------------------------------------------
+// "BB下限を下抜け後、再度上抜け"
+bbCrossUp = ta.crossover(close, lowerBand)
+
+// 現在ポジション
+inLong = strategy.position_size > 0
+
+// ★★ エントリー条件 ★★
+//   1) 上昇トレンド継続 (短期EMA > 中期EMA) 
+//   2) BB下限クロス
+//   3) RSIが規定以下
+//
+//   + オプションで "trendStart" を使って
+//     直近でトレンドが始まったときだけに絞る手もある
+//   ここでは「継続条件(inUpTrend)」で緩めにしてトレード増やす
+if bbCrossUp and not inLong
+    if inUpTrend and rsiOk
+        strategy.entry("Long", strategy.long)
+
+//------------------------------------------------
+// 5) 損切り & 利確
+//------------------------------------------------
+if inLong
+    // 損切り・利確価格
+    stopPrice = strategy.position_avg_price * (1.0 - stopLossPerc / 100)
+    limitPrice = strategy.position_avg_price * (1.0 + takeProfitPerc / 100)
+    // ポジションに対して一括exit
+    strategy.exit("Exit Long", stop=stopPrice, limit=limitPrice)
+
+//------------------------------------------------
+// 6) ネガティブ・ボリューム比率での追加決済
+//------------------------------------------------
+//  直近 volLookback バーの陰線バー出来高 / 総出来高 * 100
+negVol = close < close[1] ? volume : 0.0
+
+sumNegVol  = f_sum(negVol,  volLookback)
+sumVol     = f_sum(volume,  volLookback)
+negVolRatio = sumVol == 0.0 ? 0.0 : (sumNegVol / sumVol) * 100.0
+
+// 売り圧力が一定以上(例:50%)に達したら即決済
+if inLong and negVolRatio > volumeExitLimit
+    strategy.close("Long", comment="Volume-Based Exit")

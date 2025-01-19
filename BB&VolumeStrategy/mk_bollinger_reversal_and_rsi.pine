@@ -1,0 +1,95 @@
+//@version=6
+strategy("MK BB+Volume Strategy", // ← タイトルを変更
+     shorttitle="MK BBVolStrat", // ← ショートタイトルを変更
+     overlay=true,
+     initial_capital=1000000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10)
+
+// ----------------------
+// 【ロジック概要】(ロングのみ)
+//  1. Bollinger Bands(0.8σ, period=10)の下限を下抜け後、再度上抜け → ロング
+//  2. RSI < 60 ならエントリー許可 (従来: 40 → 60に緩和)
+//  3. 損切り & 利確
+//  4. ネガティブ・ボリューム比率 > 50% で決済
+//  5. EMAによるトレンドフィルターは削除
+// ----------------------
+
+// === 過去バーの合計をとる関数 (ta.sum()代替) ===
+f_sum(_src, _length) =>
+    float _total = 0.0
+    for i = 0 to _length - 1
+        _total += _src[i]
+    _total
+
+// ------------------------------------------------
+// 入力パラメータ
+// ------------------------------------------------
+bbLength    = input.int(14, "BB 長期")       // (14 → 10)
+bbMult      = input.float(0.8, "BB乗数(σ)") // (1 → 0.8)
+src         = input.source(close, "Bollinger計算用ソース")
+
+rsiPeriod   = input.int(5,  "RSI期間")
+rsiLimit    = input.int(50, "RSI下限(エントリー許可)") // (40 → 60)
+
+stopLossPerc   = input.float(0.5, "損切り(%)")
+takeProfitPerc = input.float(1, "利確(%)")
+
+volLookback     = input.int(14,  "出来高計算期間(<= 100推奨)")
+volumeExitLimit = input.float(50, "売り圧力(%)閾値で決済") // (60 → 50)
+
+// ------------------------------------------------
+// 1) Bollinger Bands
+// ------------------------------------------------
+basis  = ta.sma(src, bbLength)
+dev    = ta.stdev(src, bbLength)
+dev2   = dev * bbMult
+
+upperBand = basis + dev2
+lowerBand = basis - dev2
+
+plot(basis,       color=color.yellow, linewidth=2, title="BB Basis")
+plot(upperBand,   color=color.blue,   linewidth=1, title="BB Upper")
+plot(lowerBand,   color=color.orange, linewidth=1, title="BB Lower")
+fill(plot(upperBand), plot(basis),     color=color.new(color.blue,   80))
+fill(plot(basis),     plot(lowerBand), color=color.new(color.orange, 80))
+
+// ------------------------------------------------
+// 2) RSI (エントリー判定用)
+// ------------------------------------------------
+rsiValue = ta.rsi(close, rsiPeriod)
+
+// ------------------------------------------------
+// 3) ロングエントリー条件 (トレンドフィルターは削除)
+// ------------------------------------------------
+belowLower = ta.crossover(close, lowerBand)
+inLong     = strategy.position_size > 0
+
+// RSI条件
+rsiOk = rsiValue < rsiLimit
+
+// エントリー
+if belowLower and not inLong
+    if rsiOk
+        strategy.entry("Long", strategy.long)
+
+// ------------------------------------------------
+// 4) 損切り & 利確
+// ------------------------------------------------
+if inLong
+    longStop = strategy.position_avg_price * (1.0 - stopLossPerc / 100)
+    longTP   = strategy.position_avg_price * (1.0 + takeProfitPerc / 100)
+    strategy.exit("Exit Long", stop=longStop, limit=longTP)
+
+// ------------------------------------------------
+// 5) ネガティブ・ボリューム比率で決済 (売り圧力)
+//    - 売り圧力 > 50% でクローズ
+// ------------------------------------------------
+negVol = close < close[1] ? volume : 0.0
+
+sumNegVol  = f_sum(negVol,  volLookback)
+sumVol     = f_sum(volume,  volLookback)
+negVolRatio = sumVol == 0.0 ? 0.0 : (sumNegVol / sumVol) * 100.0
+
+if inLong and negVolRatio > volumeExitLimit
+    strategy.close("Long", comment="Volume-Based Exit")
