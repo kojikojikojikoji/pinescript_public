@@ -1,12 +1,10 @@
 //@version=6
-strategy(
-     title="MK Bollinger Reversal Strategy",  // ← タイトルを変更
+strategy(title="MK Bollinger Reversal Strategy",  // ← タイトルを変更
      shorttitle="MK BBRevStrat",              // ← ショートタイトルを変更
      overlay=true,
      initial_capital=1000000,
      default_qty_type=strategy.percent_of_equity,
-     default_qty_value=10
-)
+     default_qty_value=10)
 
 // ----------------------
 // 【ロジック概要】

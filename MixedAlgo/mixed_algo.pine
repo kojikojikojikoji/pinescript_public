@@ -1,0 +1,147 @@
+//@version=6
+strategy("MK Strategy - Trend Start + Support/Resistance Example",
+     shorttitle="MK_Test",
+     overlay=true,
+     initial_capital=1000000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10)
+
+//------------------------------------------------
+// 関数: 過去バーの合計 (ta.sum が使えない場合の代替)
+//------------------------------------------------
+f_sum(_src, _length) =>
+    float _total = 0.0
+    // _length 回だけループ (最大100)
+    for i = 0 to _length - 1
+        _total += _src[i]
+    _total
+
+//------------------------------------------------
+// 入力パラメータ
+//------------------------------------------------
+// Bollinger
+bbLength       = input.int(10,   "BB期間")     
+bbMult         = input.float(0.8, "BB乗数(σ)") 
+
+// EMAトレンド判定
+shortLen       = input.int(9,  "短期EMA")
+longLen        = input.int(21, "中期EMA")
+
+// RSIフィルター
+rsiPeriod      = input.int(5,   "RSI期間")
+rsiLimit       = input.int(55,  "RSI上限(エントリー許可)")
+
+// ネガティブ・ボリューム比率
+volLookback     = input.int(14, "出来高計算期間(<=100)")
+volumeExitLimit = input.float(50, "売り圧力(%)閾値")
+
+// 追加: 上値抵抗線 & 下値支持線
+supResLen = input.int(14, "Support/Resistance Lookback")
+
+// --- 上昇トレンド時の損切り・利確設定 ---
+stopLossPercUp     = input.float(0.3, title="上昇トレンド時の損切り(%)", group="損切り・利確設定")
+takeProfitPercUp   = input.float(3.0, title="上昇トレンド時の利確(%)",  group="損切り・利確設定")
+
+// --- 下降トレンド or 非上昇トレンド時の損切り・利確設定 ---
+stopLossPercDown   = input.float(1.0, title="非上昇トレンド時の損切り(%)", group="損切り・利確設定")
+takeProfitPercDown = input.float(1.5, title="非上昇トレンド時の利確(%)",  group="損切り・利確設定")
+
+//------------------------------------------------
+// 1) Bollinger Bands
+//------------------------------------------------
+src   = input.source(close, "Bollinger計算用ソース")
+basis = ta.sma(src, bbLength)
+dev   = ta.stdev(src, bbLength)
+dev2  = dev * bbMult
+
+upperBand = basis + dev2
+lowerBand = basis - dev2
+
+plot(basis,       color=color.yellow, linewidth=2, title="BB Basis")
+plot(upperBand,   color=color.blue,   linewidth=1, title="BB Upper")
+plot(lowerBand,   color=color.orange, linewidth=1, title="BB Lower")
+fill(plot(upperBand), plot(basis),     color=color.new(color.blue,   80))
+fill(plot(basis),     plot(lowerBand), color=color.new(color.orange, 80))
+
+//------------------------------------------------
+// 2) EMAトレンド判定
+//------------------------------------------------
+shortMa = ta.ema(close, shortLen)
+longMa  = ta.ema(close, longLen)
+plot(shortMa, color=color.new(color.aqua,  0), linewidth=2, title="短期EMA")
+plot(longMa,  color=color.new(color.purple,0), linewidth=2, title="中期EMA")
+
+// "上昇トレンド開始" = 短期EMAが中期EMAを上抜け
+trendStart = ta.crossover(shortMa, longMa)
+
+// "上昇トレンド継続" = 短期EMA > longMa
+inUpTrend  = shortMa > longMa
+
+//------------------------------------------------
+// 3) RSIフィルター
+//------------------------------------------------
+rsiValue = ta.rsi(close, rsiPeriod)
+rsiOk    = rsiValue < rsiLimit
+
+//------------------------------------------------
+// 4) ロングエントリー条件
+//------------------------------------------------
+// "BB下限を下抜け後、再度上抜け"
+bbCrossUp = ta.crossover(close, lowerBand)
+
+// 現在ポジション保持中か
+inLong = strategy.position_size > 0
+
+//------------------------------------------------
+// 追加: 上値抵抗線 & 下値支持線 (Donchian風)
+//------------------------------------------------
+resistanceLine = ta.highest(high, supResLen)  // 過去 supResLen 本のバーでの最高値
+supportLine    = ta.lowest(low,  supResLen)   // 過去 supResLen 本のバーでの最安値
+
+plot(resistanceLine, color=color.new(color.red, 0), linewidth=2, title="Resistance (過去高値)")
+plot(supportLine,    color=color.new(color.green, 0), linewidth=2, title="Support (過去安値)")
+
+// 条件追加例: 「価格が支持線の上にある」かどうか
+aboveSupport = close > supportLine
+
+// ★★ エントリー条件 ★★
+//   1) 上昇トレンド継続 (短期EMA > 中期EMA) 
+//   2) BB下限クロス
+//   3) RSIが規定以下
+//   4) "or" で aboveSupport を追加 (参考例)
+if bbCrossUp and not inLong
+    if inUpTrend and (rsiOk or aboveSupport)
+        strategy.entry("Long", strategy.long)
+
+//------------------------------------------------
+// 5) 損切り & 利確 (上昇 or 非上昇 で切り替え)
+//------------------------------------------------
+if inLong
+    // 上昇トレンド中かどうかで設定値を切り替え
+    float selectedStopLoss   = inUpTrend ? stopLossPercUp : stopLossPercDown
+    float selectedTakeProfit = inUpTrend ? takeProfitPercUp : takeProfitPercDown
+    
+    // 損切り・利確価格計算
+    stopPrice  = strategy.position_avg_price * (1.0 - selectedStopLoss / 100)
+    limitPrice = strategy.position_avg_price * (1.0 + selectedTakeProfit / 100)
+    
+    // ポジションに対して一括exit
+    strategy.exit("Exit Long", stop=stopPrice, limit=limitPrice)
+
+//------------------------------------------------
+// 6) ネガティブ・ボリューム比率での追加決済
+//------------------------------------------------
+negVol      = close < close[1] ? volume : 0.0
+sumNegVol   = f_sum(negVol,  volLookback)
+sumVol      = f_sum(volume,  volLookback)
+negVolRatio = sumVol == 0.0 ? 0.0 : (sumNegVol / sumVol) * 100.0
+
+// 売り圧力が一定以上(例:50%)に達したら即決済
+if inLong and negVolRatio > volumeExitLimit
+    strategy.close("Long", comment="Volume-Based Exit")
+
+//------------------------------------------------
+// 追加例: 支持線割れでクイック決済（任意で活用）
+//------------------------------------------------
+if inLong and close < supportLine
+    strategy.close("Long", comment="Support Break Exit")
